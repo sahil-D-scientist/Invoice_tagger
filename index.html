@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Product Details</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f5f7; color: #1a1a1a;
+      display: flex; justify-content: center; padding: 24px 16px;
+    }
+    .card {
+      background: #fff; width: 100%; max-width: 420px;
+      border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); overflow: hidden;
+    }
+    .img-wrap { background: #fafafa; display: flex; justify-content: center; align-items: center; padding: 16px; }
+    .img-wrap img { max-width: 100%; max-height: 320px; border-radius: 10px; object-fit: contain; }
+    .body { padding: 20px 22px 26px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sku { color: #6b7280; font-size: 14px; margin-bottom: 18px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 10px 4px; border-bottom: 1px solid #eef0f3; font-size: 15px; }
+    td.k { color: #6b7280; width: 40%; }
+    td.v { font-weight: 600; text-align: right; }
+    .empty { color: #9ca3af; text-align: center; padding: 40px 0; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0e1117; color: #e6e6e6; }
+      .card { background: #1a1d24; box-shadow: none; }
+      .img-wrap { background: #12141a; }
+      .sku { color: #9aa0aa; }
+      td { border-color: #262a33; }
+      td.k { color: #9aa0aa; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card" id="card"></div>
+  <script>
+    const p = new URLSearchParams(location.search);
+    const g = k => (p.get(k) || "").trim();
+    const name = g("n"), sku = g("s"), img = g("img");
+    const rows = [["Size", g("size")], ["Color", g("color")], ["Qty", g("qty")]];
+
+    const card = document.getElementById("card");
+    if (!name && !img) {
+      card.innerHTML = '<div class="empty">No product data in this link.</div>';
+    } else {
+      const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      const trs = rows.filter(([, v]) => v)
+        .map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${esc(v)}</td></tr>`).join("");
+      card.innerHTML = `
+        ${img ? `<div class="img-wrap"><img src="${esc(img)}" alt="${esc(name)}"></div>` : ""}
+        <div class="body">
+          <h1>${esc(name) || "Product"}</h1>
+          ${sku ? `<div class="sku">Internal SKU: ${esc(sku)}</div>` : ""}
+          <table>${trs}</table>
+        </div>`;
+    }
+  </script>
+</body>
+</html>
