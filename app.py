@@ -10,8 +10,6 @@ Reuses the per-page logic from add_qr_codes.py.
 """
 
 import re
-import socket
-from urllib.parse import urlsplit
 
 import fitz  # PyMuPDF
 import pandas as pd
@@ -20,6 +18,8 @@ import streamlit as st
 from add_qr_codes import extract_details, make_qr_png, qr_rect, view_url
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
+# Static GitHub Pages viewer that QR codes open when scanned.
+VIEWER_URL = "https://sahil-d-scientist.github.io/Invoice_tagger"
 
 st.set_page_config(page_title="Invoice QR Tagger", page_icon="🏷️", layout="centered")
 
@@ -64,42 +64,6 @@ def sheet_csv_url(link: str) -> str:
 @st.cache_data(show_spinner=False)
 def load_sheet(link: str) -> pd.DataFrame:
     return pd.read_csv(sheet_csv_url(link), dtype=str).fillna("")
-
-
-def _lan_ip() -> str:
-    """LAN IP fallback, so phones on the same Wi-Fi can reach a locally-run app."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except Exception:
-        return "localhost"
-    finally:
-        s.close()
-
-
-def auto_base_url() -> str:
-    """Origin the app is served from — correct on Streamlit Cloud and locally.
-
-    Prefers the actual page URL (st.context.url), then the Host header, and
-    finally the machine's LAN IP for a locally-run app.
-    """
-    try:
-        url = st.context.url  # e.g. https://your-app.streamlit.app/?…
-        if url:
-            p = urlsplit(url)
-            if p.scheme and p.netloc:
-                return f"{p.scheme}://{p.netloc}"
-    except Exception:
-        pass
-    try:
-        host = st.context.headers.get("Host")
-        if host:
-            scheme = "http" if host.startswith(("localhost", "127.")) else "https"
-            return f"{scheme}://{host}"
-    except Exception:
-        pass
-    return f"http://{_lan_ip()}:8501"
 
 
 def build_product_map(df: pd.DataFrame) -> dict:
@@ -153,8 +117,8 @@ st.divider()
 sheet_link = st.text_input("Product sheet", placeholder="Paste Google Sheet link…")
 app_url = st.text_input(
     "App URL for QR codes",
-    value=auto_base_url(),
-    help="Auto-detected from how you opened this app. On Streamlit Cloud this is your public app URL, so any phone can scan the QR.",
+    value=VIEWER_URL,
+    help="The static viewer QR codes open when scanned. Defaults to the GitHub Pages viewer.",
 )
 
 df = None
