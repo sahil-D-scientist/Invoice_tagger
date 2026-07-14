@@ -17,7 +17,7 @@ import fitz  # PyMuPDF
 import pandas as pd
 import streamlit as st
 
-from add_qr_codes import extract_sku, make_qr_png, qr_rect, view_url
+from add_qr_codes import extract_details, make_qr_png, qr_rect, view_url
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
 
@@ -39,6 +39,10 @@ def render_viewer(params):
         st.image(img, use_container_width=True)
     st.markdown(f"## {name}")
     st.markdown(f"**Internal SKU:** {sku}")
+    rows = [("Size", params.get("size", "")),
+            ("Color", params.get("color", "")),
+            ("Qty", params.get("qty", ""))]
+    st.table(pd.DataFrame([{"Field": k, "Value": v} for k, v in rows if v]))
 
 
 qp = st.query_params
@@ -113,10 +117,11 @@ def process_pdf_bytes(pdf_bytes: bytes, product_map: dict, base_url: str):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     results = []
     for page in doc:
-        sku = extract_sku(page)
+        details = extract_details(page)
+        sku = details["sku"] if details else None
         product = product_map.get(sku) if sku else None
         if product:
-            page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product)))
+            page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product, details)))
             status = "Tagged"
         else:
             status = "No SKU found" if not sku else "SKU not in sheet"

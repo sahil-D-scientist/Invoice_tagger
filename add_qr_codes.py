@@ -31,7 +31,10 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=cs
 
 QR_SIZE = 90          # QR side length in PDF points
 QR_MARGIN = 20        # gap from page edges / from content above
-SKU_RE = re.compile(r"Product Details.*?Order No\.\s*\n([^\n]+)", re.S)
+# Product Details rows appear in order: SKU, Size, Qty, Color (then Order No.).
+DETAILS_RE = re.compile(
+    r"Product Details.*?Order No\.\s*\n([^\n]+)\n([^\n]+)\n([^\n]+)\n([^\n]+)", re.S
+)
 
 
 # --- Data -------------------------------------------------------------------
@@ -49,18 +52,30 @@ def load_product_map(source=SHEET_URL):
     return mapping
 
 
+def extract_details(page):
+    """Return {sku, size, qty, color} from a page's Product Details section, or None."""
+    m = DETAILS_RE.search(page.get_text())
+    if not m:
+        return None
+    sku, size, qty, color = (g.strip() for g in m.groups())
+    return {"sku": sku, "size": size, "qty": qty, "color": color}
+
+
 def extract_sku(page):
     """Return the SKU string from a page's Product Details section, or None."""
-    m = SKU_RE.search(page.get_text())
-    return m.group(1).strip() if m else None
+    d = extract_details(page)
+    return d["sku"] if d else None
 
 
-def view_url(base_url: str, product: dict) -> str:
-    """Build the viewer URL that shows this product's image + text when opened."""
+def view_url(base_url: str, product: dict, details: dict) -> str:
+    """Build the viewer URL that shows the product's image + details when opened."""
     query = urlencode({
         "n": product["product_name"],
         "s": product["internal_sku"],
         "img": product["image_url"],
+        "size": details["size"],
+        "qty": details["qty"],
+        "color": details["color"],
     })
     return f"{base_url.rstrip('/')}/?{query}"
 
@@ -89,15 +104,16 @@ def qr_rect(page):
 # --- Per-page + document processing ----------------------------------------
 def process_page(page, product_map, base_url):
     """Add a product QR code to one page. Returns the SKU handled, or None if skipped."""
-    sku = extract_sku(page)
-    if not sku:
-        log.warning("Page %d: no SKU found; skipped", page.number + 1)
+    details = extract_details(page)
+    if not details:
+        log.warning("Page %d: no product details found; skipped", page.number + 1)
         return None
+    sku = details["sku"]
     product = product_map.get(sku)
     if product is None:
         log.warning("Page %d: SKU %r not in sheet; skipped", page.number + 1, sku)
         return None
-    page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product)))
+    page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product, details)))
     log.info("Page %d: SKU %r -> internal %s", page.number + 1, sku, product["internal_sku"])
     return sku
 
