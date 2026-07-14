@@ -1,0 +1,211 @@
+"""
+Streamlit app with two modes:
+
+• Viewer mode  — opened via a QR link (?n=&s=&img=). Shows the product
+  image + text on a simple page.
+• Tool mode    — paste a Google Sheet link + the public app URL, upload a PDF,
+  and download a PDF with a product QR code on every page.
+
+Reuses the per-page logic from add_qr_codes.py.
+"""
+
+import re
+import socket
+from urllib.parse import urlsplit
+
+import fitz  # PyMuPDF
+import pandas as pd
+import streamlit as st
+
+from add_qr_codes import extract_sku, make_qr_png, qr_rect, view_url
+
+REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
+
+st.set_page_config(page_title="Invoice QR Tagger", page_icon="🏷️", layout="centered")
+
+
+# --- Viewer mode (what a scanned QR opens) ---------------------------------
+def render_viewer(params):
+    name = params.get("n", "")
+    sku = params.get("s", "")
+    img = params.get("img", "")
+    st.markdown(
+        """
+        <style>.block-container {max-width: 480px; padding-top: 3rem; text-align:center;}</style>
+        """,
+        unsafe_allow_html=True,
+    )
+    if img:
+        st.image(img, use_container_width=True)
+    st.markdown(f"## {name}")
+    st.markdown(f"**Internal SKU:** {sku}")
+
+
+qp = st.query_params
+if "img" in qp or "n" in qp:
+    render_viewer(qp)
+    st.stop()
+
+
+# --- Tool-mode helpers ------------------------------------------------------
+def sheet_csv_url(link: str) -> str:
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", link)
+    if not m:
+        raise ValueError("That doesn't look like a Google Sheets link.")
+    gid = re.search(r"[#&?]gid=(\d+)", link)
+    gid = gid.group(1) if gid else "0"
+    return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv&gid={gid}"
+
+
+@st.cache_data(show_spinner=False)
+def load_sheet(link: str) -> pd.DataFrame:
+    return pd.read_csv(sheet_csv_url(link), dtype=str).fillna("")
+
+
+def _lan_ip() -> str:
+    """LAN IP fallback, so phones on the same Wi-Fi can reach a locally-run app."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "localhost"
+    finally:
+        s.close()
+
+
+def auto_base_url() -> str:
+    """Origin the app is served from — correct on Streamlit Cloud and locally.
+
+    Prefers the actual page URL (st.context.url), then the Host header, and
+    finally the machine's LAN IP for a locally-run app.
+    """
+    try:
+        url = st.context.url  # e.g. https://your-app.streamlit.app/?…
+        if url:
+            p = urlsplit(url)
+            if p.scheme and p.netloc:
+                return f"{p.scheme}://{p.netloc}"
+    except Exception:
+        pass
+    try:
+        host = st.context.headers.get("Host")
+        if host:
+            scheme = "http" if host.startswith(("localhost", "127.")) else "https"
+            return f"{scheme}://{host}"
+    except Exception:
+        pass
+    return f"http://{_lan_ip()}:8501"
+
+
+def build_product_map(df: pd.DataFrame) -> dict:
+    return {
+        r["WEBSITE_SKU"].strip(): {
+            "product_name": r["PRODUCT_NAME"].strip(),
+            "image_url": r["PRODUCT_IMAGE"].strip(),
+            "internal_sku": r["INTERNAL_SKU"].strip(),
+        }
+        for _, r in df.iterrows()
+    }
+
+
+def process_pdf_bytes(pdf_bytes: bytes, product_map: dict, base_url: str):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    results = []
+    for page in doc:
+        sku = extract_sku(page)
+        product = product_map.get(sku) if sku else None
+        if product:
+            page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product)))
+            status = "Tagged"
+        else:
+            status = "No SKU found" if not sku else "SKU not in sheet"
+        results.append((page.number + 1, sku or "", status))
+    out = doc.tobytes()
+    doc.close()
+    return out, results
+
+
+# --- Tool-mode UI -----------------------------------------------------------
+st.markdown(
+    """
+    <style>
+      .block-container {max-width: 720px; padding-top: 3rem;}
+      div[data-testid="stMetric"] {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 10px; padding: 14px 18px;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("🏷️ Invoice QR Tagger")
+st.markdown("Add a product QR code to every invoice page.")
+st.divider()
+
+sheet_link = st.text_input("Product sheet", placeholder="Paste Google Sheet link…")
+app_url = st.text_input(
+    "App URL for QR codes",
+    value=auto_base_url(),
+    help="Auto-detected from how you opened this app. On Streamlit Cloud this is your public app URL, so any phone can scan the QR.",
+)
+
+df = None
+if sheet_link.strip():
+    try:
+        df = load_sheet(sheet_link.strip())
+        missing = [c for c in REQUIRED_COLS if c not in df.columns]
+        if missing:
+            st.error(f"Sheet is missing columns: {', '.join(missing)}")
+            df = None
+        else:
+            st.success(f"Sheet connected — {len(df)} products found.", icon="✅")
+    except Exception as e:
+        st.error(f"Couldn't read the sheet: {e}", icon="⚠️")
+
+pdf_file = st.file_uploader("Invoice PDF", type=["pdf"])
+
+st.write("")
+ready = df is not None and pdf_file is not None and bool(app_url.strip())
+if st.button("Generate PDF", type="primary", use_container_width=True, disabled=not ready):
+    with st.spinner("Adding QR codes…"):
+        out_bytes, results = process_pdf_bytes(
+            pdf_file.getvalue(), build_product_map(df), app_url.strip()
+        )
+    # Persist so the download click (which reruns the script) doesn't clear it.
+    st.session_state["result"] = {
+        "bytes": out_bytes,
+        "results": results,
+        "name": pdf_file.name.rsplit(".", 1)[0] + "_with_QR.pdf",
+    }
+
+# Render results from session_state (survives the download rerun).
+if "result" in st.session_state:
+    r = st.session_state["result"]
+    results = r["results"]
+    tagged = sum(1 for _, _, s in results if s == "Tagged")
+    skipped = len(results) - tagged
+
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total pages", len(results))
+    c2.metric("Tagged", tagged)
+    c3.metric("Skipped", skipped)
+
+    st.download_button(
+        "⬇️  Download tagged PDF",
+        data=r["bytes"],
+        file_name=r["name"],
+        mime="application/pdf",
+        type="primary",
+        use_container_width=True,
+    )
+
+    with st.expander(f"Page-by-page status ({skipped} skipped)"):
+        st.dataframe(
+            pd.DataFrame(results, columns=["Page", "SKU", "Status"]),
+            use_container_width=True,
+            hide_index=True,
+        )

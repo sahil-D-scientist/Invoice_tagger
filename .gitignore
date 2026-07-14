@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+MergedPDF_with_QR.pdf
+MergedPDF_prototype.pdf
+sheet.csv
+.streamlit/secrets.toml
