@@ -24,13 +24,26 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Deploy
+## Architecture
 
-Push to GitHub and deploy `app.py` on [Streamlit Community Cloud](https://share.streamlit.io).
-The QR "App URL" auto-detects the deployed URL, so scans work from any phone.
+Two independent pieces, so the scan experience is instant:
+
+- **Generator** — the Streamlit app (`app.py`) produces the tagged PDF. Deploy on
+  [Streamlit Community Cloud](https://share.streamlit.io); Python is needed for PDF work.
+- **Viewer** — a static page (`index.html`) hosted on **GitHub Pages**. It reads the
+  QR's URL parameters (`?n=&s=&img=&size=&qty=&color=`) and renders the product card
+  in the browser with no server / no cold start.
+
+### Set up the viewer (GitHub Pages)
+
+1. Repo **Settings → Pages** → Source **Deploy from a branch** → `main` / `/ (root)` → Save.
+2. Viewer goes live at `https://sahil-d-scientist.github.io/Invoice_tagger/`.
+3. In the Streamlit tool, set **"App URL for QR codes"** to that URL. Every QR then opens
+   the static viewer when scanned.
 
 ## Files
 
-- `app.py` — Streamlit UI (tool + viewer modes)
+- `app.py` — Streamlit UI (PDF generator; also renders a fallback viewer)
 - `add_qr_codes.py` — PDF/QR processing logic (also runnable as a CLI)
+- `index.html` — fast static viewer for QR scans (GitHub Pages)
 - `requirements.txt` — dependencies
