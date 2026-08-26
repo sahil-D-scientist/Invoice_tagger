@@ -1,10 +1,10 @@
 """
 Streamlit app with two modes:
 
-• Viewer mode  — opened via a QR link (?n=&s=&img=). Shows the product
+• Viewer mode  — opened via a QR link (?n=&s=&hsn=&img=). Shows the product
   image + text on a simple page.
-• Tool mode    — paste a Google Sheet link + the public app URL, upload a PDF,
-  and download a PDF with a product QR code on every page.
+• Tool mode    — upload an Amazon invoice PDF (optionally with a Google Sheet of
+  product images) and download a PDF with a product QR code on every page.
 
 Reuses the per-page logic from add_qr_codes.py.
 """
@@ -15,7 +15,7 @@ import fitz  # PyMuPDF
 import pandas as pd
 import streamlit as st
 
-from add_qr_codes import extract_details, make_qr_png, qr_rect, view_url
+from add_qr_codes import extract_item, make_qr_png, sheet_key, stamp_tag, view_url
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
 # Static GitHub Pages viewer that QR codes open when scanned.
@@ -38,9 +38,9 @@ def render_viewer(params):
     if img:
         st.image(img, use_container_width=True)
     st.markdown(f"## {name}")
-    st.markdown(f"**Internal SKU:** {sku}")
-    rows = [("Size", params.get("size", "")),
-            ("Color", params.get("color", "")),
+    st.markdown(f"**SKU:** {sku}")
+    rows = [("ASIN", params.get("asin", "")),
+            ("HSN", params.get("hsn", "")),
             ("Qty", params.get("qty", ""))]
     st.table(pd.DataFrame([{"Field": k, "Value": v} for k, v in rows if v]))
 
@@ -68,7 +68,7 @@ def load_sheet(link: str) -> pd.DataFrame:
 
 def build_product_map(df: pd.DataFrame) -> dict:
     return {
-        r["WEBSITE_SKU"].strip(): {
+        sheet_key(r["WEBSITE_SKU"]): {
             "product_name": r["PRODUCT_NAME"].strip(),
             "image_url": r["PRODUCT_IMAGE"].strip(),
             "internal_sku": r["INTERNAL_SKU"].strip(),
@@ -81,15 +81,15 @@ def process_pdf_bytes(pdf_bytes: bytes, product_map: dict, base_url: str):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     results = []
     for page in doc:
-        details = extract_details(page)
-        sku = details["sku"] if details else None
-        product = product_map.get(sku) if sku else None
-        if product:
-            page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product, details)))
-            status = "Tagged"
-        else:
-            status = "No SKU found" if not sku else "SKU not in sheet"
-        results.append((page.number + 1, sku or "", status))
+        item = extract_item(page)
+        if not item:
+            results.append((page.number + 1, "", "No invoice item found"))
+            continue
+        product = product_map.get(sheet_key(item["text"])) if product_map else None
+        stamp_tag(page, make_qr_png(view_url(base_url, item, product)),
+                  product["internal_sku"] if product else "")
+        results.append((page.number + 1, product["internal_sku"] if product else item["sku"],
+                        "Tagged" if product else "Tagged (not in sheet)"))
     out = doc.tobytes()
     doc.close()
     return out, results
@@ -111,10 +111,15 @@ st.markdown(
 )
 
 st.title("🏷️ Invoice QR Tagger")
-st.markdown("Add a product QR code to every invoice page.")
+st.markdown("Add a product QR code to every Amazon invoice page.")
 st.divider()
 
-sheet_link = st.text_input("Product sheet", placeholder="Paste Google Sheet link…")
+sheet_link = st.text_input(
+    "Product sheet (optional)",
+    placeholder="Paste Google Sheet link…",
+    help="Maps the invoice description (WEBSITE_SKU) to an internal SKU + image. "
+         "Without it, QR codes carry the invoice text only.",
+)
 app_url = st.text_input(
     "App URL for QR codes",
     value=VIEWER_URL,
@@ -137,11 +142,11 @@ if sheet_link.strip():
 pdf_file = st.file_uploader("Invoice PDF", type=["pdf"])
 
 st.write("")
-ready = df is not None and pdf_file is not None and bool(app_url.strip())
+ready = pdf_file is not None and bool(app_url.strip())
 if st.button("Generate PDF", type="primary", use_container_width=True, disabled=not ready):
     with st.spinner("Adding QR codes…"):
         out_bytes, results = process_pdf_bytes(
-            pdf_file.getvalue(), build_product_map(df), app_url.strip()
+            pdf_file.getvalue(), build_product_map(df) if df is not None else {}, app_url.strip()
         )
     # Persist so the download click (which reruns the script) doesn't clear it.
     st.session_state["result"] = {
@@ -154,7 +159,7 @@ if st.button("Generate PDF", type="primary", use_container_width=True, disabled=
 if "result" in st.session_state:
     r = st.session_state["result"]
     results = r["results"]
-    tagged = sum(1 for _, _, s in results if s == "Tagged")
+    tagged = sum(1 for _, _, s in results if s.startswith("Tagged"))
     skipped = len(results) - tagged
 
     st.divider()
@@ -174,7 +179,7 @@ if "result" in st.session_state:
 
     with st.expander(f"Page-by-page status ({skipped} skipped)"):
         st.dataframe(
-            pd.DataFrame(results, columns=["Page", "SKU", "Status"]),
+            pd.DataFrame(results, columns=["Page", "Internal SKU", "Status"]),
             use_container_width=True,
             hide_index=True,
         )

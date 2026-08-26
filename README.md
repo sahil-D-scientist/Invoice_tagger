@@ -1,21 +1,38 @@
 # Invoice QR Tagger
 
-A Streamlit app that adds a product **QR code** to every page of a merged invoice PDF.
-Scanning a QR opens a simple page showing the product **image + text**.
+A Streamlit app that stamps the **internal SKU** and a product **QR code** onto every page
+of a merged Amazon invoice PDF. Scanning a QR opens a simple page showing the product
+**image + text**.
 
 ## How it works
 
-- **Tool mode** — paste a Google Sheet link, confirm the app URL, upload the merged PDF,
-  and download a new PDF with a QR code placed in the empty bottom area of each page.
-- **Viewer mode** — the QR encodes a URL back to this same app (`?n=&s=&img=`).
-  Opening it shows the product image, name, and internal SKU.
+- **Tool mode** — upload the merged PDF, confirm the app URL, optionally paste a Google
+  Sheet link, and download a new PDF with the internal SKU and a QR code below it, placed
+  in the tallest empty band of each page.
+- **Viewer mode** — the QR encodes a URL back to this same app (`?n=&s=&hsn=&img=`).
+  Opening it shows the product title, SKU, ASIN, HSN and qty (plus the image, if a sheet
+  is connected).
 
-Each page's **SKU** (from the "Product Details" section) is matched against the sheet's
-`WEBSITE_SKU` column. Pages whose SKU is not found are logged and left unchanged.
+Each invoice page's item line is read straight off the invoice table: **product title**,
+**ASIN**, **seller SKU**, **HSN code** and **qty**. Pages with no invoice table (e.g.
+shipping labels) are logged and left unchanged.
 
-## Product sheet columns
+## Product sheet columns (optional — supplies the internal SKU + image)
 
 `WEBSITE_SKU`, `INTERNAL_SKU`, `PRODUCT_NAME`, `PRODUCT_IMAGE`
+
+`WEBSITE_SKU` holds the item's **full invoice description**, e.g.
+
+```
+Pramila Creations Rakhi for Brother and Bhabhi Combo |
+Pack of 6 Traditional Beaded Rakhi Bracelet Set for
+Rakshabandhan with Roli Chawal | Family Rakhi Gift Pack |
+B0HC4JSYM4 ( RAKHI-NEW-Z-6 PCS )
+HSN:63079090
+```
+
+Matching ignores line breaks and letter case. Pages with no match still get a QR code,
+just without the internal SKU caption or image.
 
 ## Run locally
 
@@ -31,7 +48,7 @@ Two independent pieces, so the scan experience is instant:
 - **Generator** — the Streamlit app (`app.py`) produces the tagged PDF. Deploy on
   [Streamlit Community Cloud](https://share.streamlit.io); Python is needed for PDF work.
 - **Viewer** — a static page (`index.html`) hosted on **GitHub Pages**. It reads the
-  QR's URL parameters (`?n=&s=&img=&size=&qty=&color=`) and renders the product card
+  QR's URL parameters (`?n=&s=&asin=&hsn=&qty=&img=`) and renders the product card
   in the browser with no server / no cold start.
 
 ### Set up the viewer (GitHub Pages)

@@ -42,7 +42,7 @@
     const p = new URLSearchParams(location.search);
     const g = k => (p.get(k) || "").trim();
     const name = g("n"), sku = g("s"), img = g("img");
-    const rows = [["Size", g("size")], ["Color", g("color")], ["Qty", g("qty")]];
+    const rows = [["ASIN", g("asin")], ["HSN", g("hsn")], ["Qty", g("qty")]];
 
     const card = document.getElementById("card");
     if (!name && !img) {
@@ -55,7 +55,7 @@
         ${img ? `<div class="img-wrap"><img src="${esc(img)}" alt="${esc(name)}"></div>` : ""}
         <div class="body">
           <h1>${esc(name) || "Product"}</h1>
-          ${sku ? `<div class="sku">Internal SKU: ${esc(sku)}</div>` : ""}
+          ${sku ? `<div class="sku">SKU: ${esc(sku)}</div>` : ""}
           <table>${trs}</table>
         </div>`;
     }

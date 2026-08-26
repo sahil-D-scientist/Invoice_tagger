@@ -1,16 +1,19 @@
 """
-Add a product QR code to each page of a merged invoice PDF.
+Add a product QR code to each page of a merged Amazon invoice PDF.
 
-Each QR encodes a URL to the viewer page (the same Streamlit app in view-mode),
-so scanning it opens a simple page showing the product image + text.
+Each QR encodes a URL to the static viewer page, so scanning it opens a simple
+page showing the product image + text.
 
 For every page:
-  1. Extract the SKU from the "Product Details" section.
-  2. Look up the SKU (WEBSITE_SKU) in the product sheet.
-  3. Build a viewer URL carrying the product name, internal SKU and image URL.
-  4. Render that URL as a QR code into the empty bottom area of the page.
+  1. Extract the item line from the invoice table: product title, ASIN,
+     seller SKU, HSN code and qty.
+  2. Match the item's full description against the sheet's WEBSITE_SKU column
+     to get its INTERNAL_SKU (and product image).
+  3. Stamp the internal SKU with the QR code below it into the empty area of
+     the page.
 
-Pages whose SKU is not found in the sheet are logged and left unchanged.
+Pages without an invoice table (e.g. shipping labels) are logged and left
+unchanged.
 """
 
 import io
@@ -31,19 +34,29 @@ SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=cs
 
 QR_SIZE = 90          # QR side length in PDF points
 QR_MARGIN = 20        # gap from page edges / from content above
-# Product Details rows appear in order: SKU, Size, Qty, Color (then Order No.).
-DETAILS_RE = re.compile(
-    r"Product Details.*?Order No\.\s*\n([^\n]+)\n([^\n]+)\n([^\n]+)\n([^\n]+)", re.S
-)
+SKU_FONTSIZE = 13     # internal SKU caption above the QR
+SKU_GAP = 6           # gap between the caption and the QR
+
+# Invoice table column bounds, in PDF points.
+DESC_X0, DESC_X1 = 57, 344
+QTY_X0, QTY_X1 = 372, 397
+
+# "Title | B0XXXXXXXX ( seller sku )" tail of the description.
+ASIN_RE = re.compile(r"\|\s*(B0[A-Z0-9]{8})\s*\((.*?)\)\s*$")
 
 
 # --- Data -------------------------------------------------------------------
+def sheet_key(text: str) -> str:
+    """Normalise an invoice description so sheet / PDF text compare equal."""
+    return " ".join(text.split()).lower()
+
+
 def load_product_map(source=SHEET_URL):
-    """Return {WEBSITE_SKU: {product_name, image_url, internal_sku}} from the sheet."""
+    """Return {sheet_key(WEBSITE_SKU): {product_name, image_url, internal_sku}}."""
     df = pd.read_csv(source, dtype=str).fillna("")
     mapping = {}
     for _, r in df.iterrows():
-        mapping[r["WEBSITE_SKU"].strip()] = {
+        mapping[sheet_key(r["WEBSITE_SKU"])] = {
             "product_name": r["PRODUCT_NAME"].strip(),
             "image_url": r["PRODUCT_IMAGE"].strip(),
             "internal_sku": r["INTERNAL_SKU"].strip(),
@@ -52,32 +65,81 @@ def load_product_map(source=SHEET_URL):
     return mapping
 
 
-def extract_details(page):
-    """Return {sku, size, qty, color} from a page's Product Details section, or None."""
-    m = DETAILS_RE.search(page.get_text())
-    if not m:
-        return None
-    sku, size, qty, color = (g.strip() for g in m.groups())
-    return {"sku": sku, "size": size, "qty": qty, "color": color}
+def _words(page):
+    """Page words as {text, x0, x1, top} dicts."""
+    return [
+        {"text": w[4], "x0": w[0], "x1": w[2], "top": w[1]}
+        for w in page.get_text("words")
+    ]
 
 
-def extract_sku(page):
-    """Return the SKU string from a page's Product Details section, or None."""
-    d = extract_details(page)
-    return d["sku"] if d else None
+def extract_items(page):
+    """Return the invoice table's items as [{title, asin, sku, hsn, qty}]."""
+    words = _words(page)
+    hdr = next((w for w in words if w["text"] == "Description"), None)
+    tot = next((w for w in words if w["text"] == "TOTAL:"), None)
+    if not hdr or not tot:
+        return []
+    top, bot = hdr["top"], tot["top"]
+
+    # Each item starts with its Sl. No in the leftmost column.
+    starts = sorted(
+        (w for w in words
+         if w["x1"] < DESC_X0 and w["text"].isdigit() and top < w["top"] < bot),
+        key=lambda w: w["top"],
+    )
+
+    items = []
+    for i, s in enumerate(starts):
+        y0 = s["top"] - 2
+        y1 = starts[i + 1]["top"] - 2 if i + 1 < len(starts) else bot
+        row = [w for w in words if y0 <= w["top"] < y1]
+        row.sort(key=lambda w: (round(w["top"]), w["x0"]))
+
+        tokens, hsn = [], ""
+        for w in row:
+            if not (DESC_X0 <= w["x0"] and w["x1"] <= DESC_X1):
+                continue
+            t = w["text"]
+            if t.startswith("HSN:"):
+                hsn = t[4:]
+                break
+            if t.startswith("₹"):      # price column wrapping into the description
+                if tokens and tokens[-1] == "-":
+                    tokens.pop()
+                continue
+            tokens.append(t)
+
+        desc = " ".join(tokens)
+        m = ASIN_RE.search(desc)
+        title, asin, sku = (desc[: m.start()].rstrip(" |"), m.group(1), m.group(2).strip()) \
+            if m else (desc, "", "")
+        qty = next((w["text"] for w in row if QTY_X0 <= w["x0"] and w["x1"] <= QTY_X1), "")
+        items.append({"title": title, "asin": asin, "sku": sku, "hsn": hsn, "qty": qty,
+                      "text": f"{desc} HSN:{hsn}" if hsn else desc})
+    return items
 
 
-def view_url(base_url: str, product: dict, details: dict) -> str:
-    """Build the viewer URL that shows the product's image + details when opened."""
-    query = urlencode({
-        "n": product["product_name"],
-        "s": product["internal_sku"],
-        "img": product["image_url"],
-        "size": details["size"],
-        "qty": details["qty"],
-        "color": details["color"],
-    })
-    return f"{base_url.rstrip('/')}/?{query}"
+def extract_item(page):
+    """Return the page's first invoice item, or None."""
+    items = extract_items(page)
+    return items[0] if items else None
+
+
+def view_url(base_url: str, item: dict, product: dict | None = None) -> str:
+    """Build the viewer URL that shows the product's details when opened."""
+    query = {
+        "n": item["title"],
+        "asin": item["asin"],
+        "s": item["sku"],
+        "hsn": item["hsn"],
+        "qty": item["qty"],
+    }
+    if product:
+        query["img"] = product["image_url"]
+        if product["internal_sku"]:
+            query["s"] = product["internal_sku"]
+    return f"{base_url.rstrip('/')}/?{urlencode({k: v for k, v in query.items() if v})}"
 
 
 def make_qr_png(data: str) -> bytes:
@@ -90,32 +152,54 @@ def make_qr_png(data: str) -> bytes:
     return buf.getvalue()
 
 
-def qr_rect(page):
-    """Bottom-right rectangle for the QR, placed in the empty area below content."""
-    blocks = page.get_text("blocks")
-    content_bottom = max((b[3] for b in blocks), default=0)
-    x1 = page.rect.width - QR_MARGIN
-    x0 = x1 - QR_SIZE
-    y0 = min(content_bottom + QR_MARGIN, page.rect.height - QR_MARGIN - QR_SIZE)
-    y0 = max(y0, content_bottom + 2)  # ensure no overlap with content
-    return fitz.Rect(x0, y0, x0 + QR_SIZE, y0 + QR_SIZE)
+def empty_band(page):
+    """Return (top, height) of the tallest gap between text blocks on the page."""
+    spans = sorted((b[1], b[3]) for b in page.get_text("blocks"))
+    merged = []
+    for top, bottom in spans:
+        if merged and top <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], bottom)
+        else:
+            merged.append([top, bottom])
+
+    edges = [QR_MARGIN] + [y for span in merged for y in span] + [page.rect.height - QR_MARGIN]
+    gaps = [(edges[i + 1] - edges[i], edges[i]) for i in range(0, len(edges) - 1, 2)]
+    height, top = max(gaps)
+    return top, height
+
+
+def stamp_tag(page, qr_png: bytes, internal_sku: str = ""):
+    """Draw the internal SKU with its QR code below it, in the page's empty band."""
+    top, height = empty_band(page)
+    caption = (SKU_FONTSIZE + SKU_GAP) if internal_sku else 0
+    block = QR_SIZE + caption
+    y = top + max((height - block) / 2, 0)
+    y = min(y, page.rect.height - QR_MARGIN - block)
+    cx = page.rect.width / 2
+
+    if internal_sku:
+        width = fitz.get_text_length(internal_sku, fontname="hebo", fontsize=SKU_FONTSIZE)
+        page.insert_text((cx - width / 2, y + SKU_FONTSIZE),
+                         internal_sku, fontname="hebo", fontsize=SKU_FONTSIZE)
+    page.insert_image(
+        fitz.Rect(cx - QR_SIZE / 2, y + caption, cx + QR_SIZE / 2, y + caption + QR_SIZE),
+        stream=qr_png,
+    )
 
 
 # --- Per-page + document processing ----------------------------------------
 def process_page(page, product_map, base_url):
-    """Add a product QR code to one page. Returns the SKU handled, or None if skipped."""
-    details = extract_details(page)
-    if not details:
-        log.warning("Page %d: no product details found; skipped", page.number + 1)
+    """Add a product QR code to one page. Returns the item handled, or None if skipped."""
+    item = extract_item(page)
+    if not item:
+        log.warning("Page %d: no invoice item found; skipped", page.number + 1)
         return None
-    sku = details["sku"]
-    product = product_map.get(sku)
-    if product is None:
-        log.warning("Page %d: SKU %r not in sheet; skipped", page.number + 1, sku)
-        return None
-    page.insert_image(qr_rect(page), stream=make_qr_png(view_url(base_url, product, details)))
-    log.info("Page %d: SKU %r -> internal %s", page.number + 1, sku, product["internal_sku"])
-    return sku
+    product = product_map.get(sheet_key(item["text"])) if product_map else None
+    stamp_tag(page, make_qr_png(view_url(base_url, item, product)),
+              product["internal_sku"] if product else "")
+    log.info("Page %d: %s -> internal %s", page.number + 1, item["sku"],
+             product["internal_sku"] if product else "(not in sheet)")
+    return item
 
 
 def process_pdf(in_path, out_path, product_map, base_url, page_limit=None):
@@ -135,8 +219,9 @@ def process_pdf(in_path, out_path, product_map, base_url, page_limit=None):
 if __name__ == "__main__":
     import sys
 
-    limit = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    base = sys.argv[2] if len(sys.argv) > 2 else "http://localhost:8501"
+    in_pdf = sys.argv[1] if len(sys.argv) > 1 else "MergedPDF.pdf"
+    limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    base = sys.argv[3] if len(sys.argv) > 3 else "https://sahil-d-scientist.github.io/Invoice_tagger"
     pmap = load_product_map()
-    out = "MergedPDF_prototype.pdf" if limit else "MergedPDF_with_QR.pdf"
-    process_pdf("MergedPDF.pdf", out, pmap, base, page_limit=limit)
+    out = in_pdf.rsplit(".", 1)[0] + ("_prototype.pdf" if limit else "_with_QR.pdf")
+    process_pdf(in_pdf, out, pmap, base, page_limit=limit)
