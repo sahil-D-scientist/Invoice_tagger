@@ -8,7 +8,7 @@ For every page:
   1. Extract the item line from the invoice table: product title, ASIN,
      seller SKU, HSN code and qty.
   2. Match the item's full description against the sheet's WEBSITE_SKU column
-     to get its INTERNAL_SKU (and product image).
+     to get its INTERNAL_SKU and the URL of its product image.
   3. Stamp the internal SKU with the QR code below it into the empty area of
      the page.
 
@@ -20,7 +20,6 @@ import io
 import logging
 import re
 import urllib.request
-import zipfile
 from urllib.parse import urlencode
 
 import fitz  # PyMuPDF
@@ -41,6 +40,9 @@ SKU_GAP = 6           # gap between the caption and the QR
 IMG_SIZE = 90         # product image drawn beside the QR
 IMG_GAP = 10          # gap between the image and the QR
 
+# Image hosts (Amazon included) reject the default urllib user agent.
+USER_AGENT = "Mozilla/5.0 (compatible; InvoiceQRTagger/1.0)"
+
 # Invoice table column bounds, in PDF points.
 DESC_X0, DESC_X1 = 57, 344
 QTY_X0, QTY_X1 = 372, 397
@@ -55,61 +57,37 @@ def sheet_key(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
-def load_sheet_pictures(sheet_id=SHEET_ID):
-    """Return {data row index: image bytes} for pictures pasted into the sheet.
-
-    Pictures float above their cell rather than being its value, so they are
-    absent from the CSV export; the xlsx export carries them as drawings.
-    """
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
-    try:
-        book = zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(url).read()))
-    except Exception as e:
-        log.warning("Could not read pictures from the sheet: %s", e)
-        return {}
-    if "xl/drawings/drawing1.xml" not in book.namelist():
-        return {}
-
-    rels = dict(re.findall(
-        r'Id="([^"]+)"[^>]*Target="([^"]+)"',
-        book.read("xl/drawings/_rels/drawing1.xml.rels").decode("utf-8"),
-    ))
-    drawing = book.read("xl/drawings/drawing1.xml").decode("utf-8")
-    pictures = {}
-    for anchor in re.findall(r"<xdr:(?:one|two)CellAnchor.*?</xdr:(?:one|two)CellAnchor>",
-                             drawing, re.S):
-        row = re.search(r"<xdr:row>(\d+)</xdr:row>", anchor)
-        rid = re.search(r'r:embed="([^"]+)"', anchor)
-        if not row or not rid:
-            continue
-        target = rels[rid.group(1)].replace("../", "xl/")
-        pictures[int(row.group(1)) - 1] = book.read(target)   # row 0 is the header
-    log.info("Found %d pasted picture(s) in the sheet", len(pictures))
-    return pictures
-
-
 def fetch_image(url: str) -> bytes:
-    """Download a product image, or return b"" if it can't be fetched."""
+    """Download a product image. Returns b"" unless the bytes really are an image.
+
+    A link that resolves to a web page (a product page, a Drive share link) would
+    otherwise reach PyMuPDF as HTML and abort the whole run.
+    """
     try:
-        return urllib.request.urlopen(url, timeout=10).read()
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        data = urllib.request.urlopen(request, timeout=15).read()
     except Exception as e:
         log.warning("Could not fetch image %s: %s", url, e)
         return b""
+    try:
+        fitz.Pixmap(io.BytesIO(data))
+    except Exception:
+        log.warning("Not an image (is it a link to a web page?): %s", url)
+        return b""
+    return data
 
 
-def load_product_map(source=SHEET_URL, pictures=None):
+def load_product_map(source=SHEET_URL):
     """Return {sheet_key(WEBSITE_SKU): {product_name, image_url, internal_sku, image}}."""
     df = pd.read_csv(source, dtype=str).fillna("")
-    if pictures is None:
-        pictures = load_sheet_pictures()
     mapping = {}
-    for i, r in df.iterrows():
+    for _, r in df.iterrows():
         image_url = r["PRODUCT_IMAGE"].strip()
         mapping[sheet_key(r["WEBSITE_SKU"])] = {
             "product_name": r["PRODUCT_NAME"].strip(),
             "image_url": image_url,
             "internal_sku": r["INTERNAL_SKU"].strip(),
-            "image": fetch_image(image_url) if image_url else pictures.get(i, b""),
+            "image": fetch_image(image_url) if image_url else b"",
         }
     log.info("Loaded %d products from sheet", len(mapping))
     return mapping

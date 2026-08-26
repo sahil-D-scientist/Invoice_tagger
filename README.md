@@ -34,11 +34,11 @@ HSN:63079090
 Matching ignores line breaks and letter case. Pages with no match still get a QR code,
 just without the internal SKU caption or image.
 
-`PRODUCT_IMAGE` may hold either a direct image URL or a picture pasted into the cell.
-Pasted pictures float above the cell instead of being its value, so they are missing from
-the CSV export; they are read from the sheet's xlsx export instead. Only a URL can be
-carried inside the QR code, so a pasted picture is printed on the PDF but does not appear
-on the scanned viewer page.
+`PRODUCT_IMAGE` must be a **direct image URL** (right-click the product photo -> *Copy
+image address*; it ends in `.jpg` / `.png`). A link to a web page, or a picture pasted
+into the cell, will not work: pasted pictures are not the cell's value, so they never
+reach the CSV export, and a page URL downloads HTML rather than an image. Rows whose
+image can't be fetched are logged and simply get no picture.
 
 ## Run locally
 
