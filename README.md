@@ -1,14 +1,14 @@
 # Invoice QR Tagger
 
-A Streamlit app that stamps the **internal SKU** and a product **QR code** onto every page
-of a merged Amazon invoice PDF. Scanning a QR opens a simple page showing the product
-**image + text**.
+A Streamlit app that stamps the **internal SKU**, the product **image** and a **QR code**
+onto every page of a merged Amazon invoice PDF. Scanning a QR opens a simple page showing
+the product image + text.
 
 ## How it works
 
 - **Tool mode** — upload the merged PDF, confirm the app URL, optionally paste a Google
-  Sheet link, and download a new PDF with the internal SKU and a QR code below it, placed
-  in the tallest empty band of each page.
+  Sheet link, and download a new PDF with the internal SKU above the product image and QR
+  code, placed side by side in the tallest empty band of each page.
 - **Viewer mode** — the QR encodes a URL back to this same app (`?n=&s=&hsn=&img=`).
   Opening it shows the product title, SKU, ASIN, HSN and qty (plus the image, if a sheet
   is connected).
@@ -33,6 +33,12 @@ HSN:63079090
 
 Matching ignores line breaks and letter case. Pages with no match still get a QR code,
 just without the internal SKU caption or image.
+
+`PRODUCT_IMAGE` may hold either a direct image URL or a picture pasted into the cell.
+Pasted pictures float above the cell instead of being its value, so they are missing from
+the CSV export; they are read from the sheet's xlsx export instead. Only a URL can be
+carried inside the QR code, so a pasted picture is printed on the PDF but does not appear
+on the scanned viewer page.
 
 ## Run locally
 

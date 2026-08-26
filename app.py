@@ -15,7 +15,8 @@ import fitz  # PyMuPDF
 import pandas as pd
 import streamlit as st
 
-from add_qr_codes import extract_item, make_qr_png, sheet_key, stamp_tag, view_url
+from add_qr_codes import (extract_item, fetch_image, load_sheet_pictures, make_qr_png,
+                          sheet_key, stamp_tag, view_url)
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
 # Static GitHub Pages viewer that QR codes open when scanned.
@@ -52,13 +53,17 @@ if "img" in qp or "n" in qp:
 
 
 # --- Tool-mode helpers ------------------------------------------------------
-def sheet_csv_url(link: str) -> str:
+def sheet_id(link: str) -> str:
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", link)
     if not m:
         raise ValueError("That doesn't look like a Google Sheets link.")
+    return m.group(1)
+
+
+def sheet_csv_url(link: str) -> str:
     gid = re.search(r"[#&?]gid=(\d+)", link)
     gid = gid.group(1) if gid else "0"
-    return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv&gid={gid}"
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id(link)}/export?format=csv&gid={gid}"
 
 
 @st.cache_data(show_spinner=False)
@@ -66,14 +71,19 @@ def load_sheet(link: str) -> pd.DataFrame:
     return pd.read_csv(sheet_csv_url(link), dtype=str).fillna("")
 
 
-def build_product_map(df: pd.DataFrame) -> dict:
+@st.cache_data(show_spinner=False)
+def build_product_map(df: pd.DataFrame, link: str) -> dict:
+    """Map each sheet row by its description; pictures come from the URL or the cell."""
+    pictures = load_sheet_pictures(sheet_id(link))
     return {
         sheet_key(r["WEBSITE_SKU"]): {
             "product_name": r["PRODUCT_NAME"].strip(),
             "image_url": r["PRODUCT_IMAGE"].strip(),
             "internal_sku": r["INTERNAL_SKU"].strip(),
+            "image": (fetch_image(r["PRODUCT_IMAGE"].strip())
+                      if r["PRODUCT_IMAGE"].strip() else pictures.get(i, b"")),
         }
-        for _, r in df.iterrows()
+        for i, r in df.iterrows()
     }
 
 
@@ -87,7 +97,8 @@ def process_pdf_bytes(pdf_bytes: bytes, product_map: dict, base_url: str):
             continue
         product = product_map.get(sheet_key(item["text"])) if product_map else None
         stamp_tag(page, make_qr_png(view_url(base_url, item, product)),
-                  product["internal_sku"] if product else "")
+                  product["internal_sku"] if product else "",
+                  product["image"] if product else b"")
         results.append((page.number + 1, product["internal_sku"] if product else item["sku"],
                         "Tagged" if product else "Tagged (not in sheet)"))
     out = doc.tobytes()
@@ -118,7 +129,7 @@ sheet_link = st.text_input(
     "Product sheet (optional)",
     placeholder="Paste Google Sheet link…",
     help="Maps the invoice description (WEBSITE_SKU) to an internal SKU + image. "
-         "Without it, QR codes carry the invoice text only.",
+         "Without it, pages get a QR code only.",
 )
 app_url = st.text_input(
     "App URL for QR codes",
@@ -146,7 +157,9 @@ ready = pdf_file is not None and bool(app_url.strip())
 if st.button("Generate PDF", type="primary", use_container_width=True, disabled=not ready):
     with st.spinner("Adding QR codes…"):
         out_bytes, results = process_pdf_bytes(
-            pdf_file.getvalue(), build_product_map(df) if df is not None else {}, app_url.strip()
+            pdf_file.getvalue(),
+            build_product_map(df, sheet_link.strip()) if df is not None else {},
+            app_url.strip(),
         )
     # Persist so the download click (which reruns the script) doesn't clear it.
     st.session_state["result"] = {

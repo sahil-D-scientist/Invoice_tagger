@@ -19,6 +19,8 @@ unchanged.
 import io
 import logging
 import re
+import urllib.request
+import zipfile
 from urllib.parse import urlencode
 
 import fitz  # PyMuPDF
@@ -36,6 +38,8 @@ QR_SIZE = 90          # QR side length in PDF points
 QR_MARGIN = 20        # gap from page edges / from content above
 SKU_FONTSIZE = 13     # internal SKU caption above the QR
 SKU_GAP = 6           # gap between the caption and the QR
+IMG_SIZE = 90         # product image drawn beside the QR
+IMG_GAP = 10          # gap between the image and the QR
 
 # Invoice table column bounds, in PDF points.
 DESC_X0, DESC_X1 = 57, 344
@@ -51,15 +55,61 @@ def sheet_key(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
-def load_product_map(source=SHEET_URL):
-    """Return {sheet_key(WEBSITE_SKU): {product_name, image_url, internal_sku}}."""
+def load_sheet_pictures(sheet_id=SHEET_ID):
+    """Return {data row index: image bytes} for pictures pasted into the sheet.
+
+    Pictures float above their cell rather than being its value, so they are
+    absent from the CSV export; the xlsx export carries them as drawings.
+    """
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+    try:
+        book = zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(url).read()))
+    except Exception as e:
+        log.warning("Could not read pictures from the sheet: %s", e)
+        return {}
+    if "xl/drawings/drawing1.xml" not in book.namelist():
+        return {}
+
+    rels = dict(re.findall(
+        r'Id="([^"]+)"[^>]*Target="([^"]+)"',
+        book.read("xl/drawings/_rels/drawing1.xml.rels").decode("utf-8"),
+    ))
+    drawing = book.read("xl/drawings/drawing1.xml").decode("utf-8")
+    pictures = {}
+    for anchor in re.findall(r"<xdr:(?:one|two)CellAnchor.*?</xdr:(?:one|two)CellAnchor>",
+                             drawing, re.S):
+        row = re.search(r"<xdr:row>(\d+)</xdr:row>", anchor)
+        rid = re.search(r'r:embed="([^"]+)"', anchor)
+        if not row or not rid:
+            continue
+        target = rels[rid.group(1)].replace("../", "xl/")
+        pictures[int(row.group(1)) - 1] = book.read(target)   # row 0 is the header
+    log.info("Found %d pasted picture(s) in the sheet", len(pictures))
+    return pictures
+
+
+def fetch_image(url: str) -> bytes:
+    """Download a product image, or return b"" if it can't be fetched."""
+    try:
+        return urllib.request.urlopen(url, timeout=10).read()
+    except Exception as e:
+        log.warning("Could not fetch image %s: %s", url, e)
+        return b""
+
+
+def load_product_map(source=SHEET_URL, pictures=None):
+    """Return {sheet_key(WEBSITE_SKU): {product_name, image_url, internal_sku, image}}."""
     df = pd.read_csv(source, dtype=str).fillna("")
+    if pictures is None:
+        pictures = load_sheet_pictures()
     mapping = {}
-    for _, r in df.iterrows():
+    for i, r in df.iterrows():
+        image_url = r["PRODUCT_IMAGE"].strip()
         mapping[sheet_key(r["WEBSITE_SKU"])] = {
             "product_name": r["PRODUCT_NAME"].strip(),
-            "image_url": r["PRODUCT_IMAGE"].strip(),
+            "image_url": image_url,
             "internal_sku": r["INTERNAL_SKU"].strip(),
+            "image": fetch_image(image_url) if image_url else pictures.get(i, b""),
         }
     log.info("Loaded %d products from sheet", len(mapping))
     return mapping
@@ -168,11 +218,11 @@ def empty_band(page):
     return top, height
 
 
-def stamp_tag(page, qr_png: bytes, internal_sku: str = ""):
-    """Draw the internal SKU with its QR code below it, in the page's empty band."""
+def stamp_tag(page, qr_png: bytes, internal_sku: str = "", image: bytes = b""):
+    """Draw the internal SKU, its QR code, and the product image beside the QR."""
     top, height = empty_band(page)
     caption = (SKU_FONTSIZE + SKU_GAP) if internal_sku else 0
-    block = QR_SIZE + caption
+    block = max(QR_SIZE, IMG_SIZE if image else 0) + caption
     y = top + max((height - block) / 2, 0)
     y = min(y, page.rect.height - QR_MARGIN - block)
     cx = page.rect.width / 2
@@ -181,10 +231,16 @@ def stamp_tag(page, qr_png: bytes, internal_sku: str = ""):
         width = fitz.get_text_length(internal_sku, fontname="hebo", fontsize=SKU_FONTSIZE)
         page.insert_text((cx - width / 2, y + SKU_FONTSIZE),
                          internal_sku, fontname="hebo", fontsize=SKU_FONTSIZE)
-    page.insert_image(
-        fitz.Rect(cx - QR_SIZE / 2, y + caption, cx + QR_SIZE / 2, y + caption + QR_SIZE),
-        stream=qr_png,
-    )
+
+    # Image and QR sit side by side, centred together on the page.
+    row_width = QR_SIZE + (IMG_GAP + IMG_SIZE if image else 0)
+    x = cx - row_width / 2
+    y += caption
+    if image:
+        page.insert_image(fitz.Rect(x, y, x + IMG_SIZE, y + IMG_SIZE), stream=image,
+                          keep_proportion=True)
+        x += IMG_SIZE + IMG_GAP
+    page.insert_image(fitz.Rect(x, y, x + QR_SIZE, y + QR_SIZE), stream=qr_png)
 
 
 # --- Per-page + document processing ----------------------------------------
@@ -196,7 +252,8 @@ def process_page(page, product_map, base_url):
         return None
     product = product_map.get(sheet_key(item["text"])) if product_map else None
     stamp_tag(page, make_qr_png(view_url(base_url, item, product)),
-              product["internal_sku"] if product else "")
+              product["internal_sku"] if product else "",
+              product["image"] if product else b"")
     log.info("Page %d: %s -> internal %s", page.number + 1, item["sku"],
              product["internal_sku"] if product else "(not in sheet)")
     return item
