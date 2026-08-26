@@ -19,7 +19,7 @@ from add_qr_codes import extract_item, fetch_image, make_qr_png, sheet_key, stam
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
 # Bump on deploy, so a stale Streamlit Cloud deployment is visible at a glance.
-BUILD = "build 8 - images no longer cached"
+BUILD = "build 9 - bigger QR, Hindi SKU captions"
 # Static GitHub Pages viewer that QR codes open when scanned.
 VIEWER_URL = "https://sahil-d-scientist.github.io/Invoice_tagger"
 

@@ -70,4 +70,5 @@ Two independent pieces, so the scan experience is instant:
 - `app.py` — Streamlit UI (PDF generator; also renders a fallback viewer)
 - `add_qr_codes.py` — PDF/QR processing logic (also runnable as a CLI)
 - `index.html` — fast static viewer for QR scans (GitHub Pages)
+- `fonts/` — Noto Sans Devanagari (SIL Open Font License), used for Hindi SKU captions
 - `requirements.txt` — dependencies

@@ -19,6 +19,7 @@ is not in the sheet, are logged and left unchanged.
 
 import io
 import logging
+import os
 import re
 import urllib.request
 from urllib.parse import urlencode
@@ -34,12 +35,20 @@ log = logging.getLogger("qr")
 SHEET_ID = "1BMwaGapRsoPJ8sdteFzpRenFJbkds0AIex75nWF9TTM"
 SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
 
-QR_SIZE = 90          # QR side length in PDF points
+QR_MAX = 140          # QR side length in PDF points; shrunk to fit the page's gap
+QR_MIN = 80           # never go below this, or phones struggle to read it
 QR_MARGIN = 20        # gap from page edges / from content above
 SKU_FONTSIZE = 13     # internal SKU caption above the QR
 SKU_GAP = 6           # gap between the caption and the QR
-IMG_SIZE = 90         # product image drawn beside the QR
-IMG_GAP = 10          # gap between the image and the QR
+IMG_GAP = 10          # gap between the product image and the QR
+QR_BOX = 20           # pixels per QR module: keeps the code crisp when printed
+
+# Internal SKUs are written in Hindi, which the built-in PDF fonts cannot draw.
+FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+CAPTION_CSS = f"""
+@font-face {{font-family: sku; src: url(NotoSansDevanagari-Regular.ttf);}}
+* {{font-family: sku; font-size: {SKU_FONTSIZE}px; font-weight: bold; text-align: center;}}
+"""
 
 # Image hosts (Amazon, Google Drive) reject the default urllib user agent.
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -173,7 +182,6 @@ def extract_item(page):
 def view_url(base_url: str, item: dict, product=None) -> str:
     """Build the viewer URL that shows the product's details when opened."""
     query = {
-        "n": item["title"],
         "asin": item["asin"],
         "s": item["sku"],
         "hsn": item["hsn"],
@@ -188,7 +196,9 @@ def view_url(base_url: str, item: dict, product=None) -> str:
 
 def make_qr_png(data: str) -> bytes:
     """Render a string (the viewer URL) to a QR-code PNG (bytes)."""
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
+    # Level L keeps the module count down, so each module prints bigger and scans
+    # from further away; invoice paper is clean enough not to need more.
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=QR_BOX, border=2)
     qr.add_data(data)
     qr.make(fit=True)
     buf = io.BytesIO()
@@ -213,31 +223,37 @@ def empty_band(page):
 
 
 def stamp_tag(page, qr_png: bytes, internal_sku: str = "", image: bytes = b""):
-    """Draw the internal SKU, its QR code, and the product image beside the QR."""
+    """Draw the internal SKU, its QR code, and the product image beside the QR.
+
+    The QR is drawn as large as the page's empty gap allows, since a bigger
+    code is what makes it readable at a glance.
+    """
     top, height = empty_band(page)
     caption = (SKU_FONTSIZE + SKU_GAP) if internal_sku else 0
-    block = max(QR_SIZE, IMG_SIZE if image else 0) + caption
+    size = max(min(QR_MAX, height - caption - QR_MARGIN), QR_MIN)
+    block = size + caption
     y = top + max((height - block) / 2, 0)
     y = min(y, page.rect.height - QR_MARGIN - block)
     cx = page.rect.width / 2
 
     if internal_sku:
-        width = fitz.get_text_length(internal_sku, fontname="hebo", fontsize=SKU_FONTSIZE)
-        page.insert_text((cx - width / 2, y + SKU_FONTSIZE),
-                         internal_sku, fontname="hebo", fontsize=SKU_FONTSIZE)
+        page.insert_htmlbox(
+            fitz.Rect(QR_MARGIN, y, page.rect.width - QR_MARGIN, y + caption),
+            internal_sku, css=CAPTION_CSS, archive=fitz.Archive(FONT_DIR),
+        )
 
     # Image and QR sit side by side, centred together on the page.
-    row_width = QR_SIZE + (IMG_GAP + IMG_SIZE if image else 0)
+    row_width = size + (IMG_GAP + size if image else 0)
     x = cx - row_width / 2
     y += caption
     if image:
         try:
-            page.insert_image(fitz.Rect(x, y, x + IMG_SIZE, y + IMG_SIZE), stream=image,
+            page.insert_image(fitz.Rect(x, y, x + size, y + size), stream=image,
                               keep_proportion=True)
         except Exception as e:                      # a format PyMuPDF can't place
             log.warning("Page %d: could not draw the product image: %s", page.number + 1, e)
-        x += IMG_SIZE + IMG_GAP
-    page.insert_image(fitz.Rect(x, y, x + QR_SIZE, y + QR_SIZE), stream=qr_png)
+        x += size + IMG_GAP
+    page.insert_image(fitz.Rect(x, y, x + size, y + size), stream=qr_png)
 
 
 # --- Per-page + document processing ----------------------------------------
