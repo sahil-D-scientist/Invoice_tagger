@@ -62,9 +62,13 @@ def sheet_key(text: str) -> str:
 
 
 def direct_image_url(url: str) -> str:
-    """Rewrite a Google Drive share link to the URL that serves the file itself."""
+    """Rewrite a Google Drive share link to one that serves the image itself.
+
+    The thumbnail endpoint is used because Drive's download endpoint does not
+    render inside an <img> tag on the viewer page.
+    """
     m = DRIVE_RE.search(url)
-    return f"https://drive.google.com/uc?export=download&id={m.group(1)}" if m else url
+    return f"https://drive.google.com/thumbnail?id={m.group(1)}&sz=w1000" if m else url
 
 
 def fetch_image(url: str) -> bytes:

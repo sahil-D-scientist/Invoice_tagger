@@ -26,7 +26,6 @@ st.set_page_config(page_title="Invoice QR Tagger", page_icon="🏷️", layout="
 
 # --- Viewer mode (what a scanned QR opens) ---------------------------------
 def render_viewer(params):
-    name = params.get("n", "")
     sku = params.get("s", "")
     img = params.get("img", "")
     st.markdown(
@@ -37,8 +36,7 @@ def render_viewer(params):
     )
     if img:
         st.image(img, use_container_width=True)
-    st.markdown(f"## {name}")
-    st.markdown(f"**SKU:** {sku}")
+    st.markdown(f"## {sku}")
     rows = [("ASIN", params.get("asin", "")),
             ("HSN", params.get("hsn", "")),
             ("Qty", params.get("qty", ""))]
