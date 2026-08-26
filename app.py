@@ -19,7 +19,7 @@ from add_qr_codes import extract_item, fetch_image, make_qr_png, sheet_key, stam
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
 # Bump on deploy, so a stale Streamlit Cloud deployment is visible at a glance.
-BUILD = "build 7 - product image beside the QR"
+BUILD = "build 8 - images no longer cached"
 # Static GitHub Pages viewer that QR codes open when scanned.
 VIEWER_URL = "https://sahil-d-scientist.github.io/Invoice_tagger"
 
@@ -61,12 +61,11 @@ def sheet_csv_url(link: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export?format=csv&gid={gid}"
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def load_sheet(link: str) -> pd.DataFrame:
     return pd.read_csv(sheet_csv_url(link), dtype=str).fillna("")
 
 
-@st.cache_data(show_spinner=False)
 def build_product_map(df: pd.DataFrame) -> dict:
     """Map each sheet row by its description, downloading its product image."""
     return {
