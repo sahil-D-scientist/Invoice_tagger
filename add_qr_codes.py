@@ -41,8 +41,11 @@ SKU_GAP = 6           # gap between the caption and the QR
 IMG_SIZE = 90         # product image drawn beside the QR
 IMG_GAP = 10          # gap between the image and the QR
 
-# Image hosts (Amazon included) reject the default urllib user agent.
-USER_AGENT = "Mozilla/5.0 (compatible; InvoiceQRTagger/1.0)"
+# Image hosts (Amazon, Google Drive) reject the default urllib user agent.
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+# Leading bytes of the formats PyMuPDF can place: JPEG, PNG, GIF, BMP, WEBP.
+IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"BM", b"RIFF")
 
 # Invoice table column bounds, in PDF points.
 DESC_X0, DESC_X1 = 57, 344
@@ -84,9 +87,7 @@ def fetch_image(url: str) -> bytes:
     except Exception as e:
         log.warning("Could not fetch image %s: %s", url, e)
         return b""
-    try:
-        fitz.Pixmap(io.BytesIO(data))
-    except Exception:
+    if not data.startswith(IMAGE_MAGIC):
         log.warning("Not an image (is it a link to a web page?): %s", url)
         return b""
     return data
@@ -230,8 +231,11 @@ def stamp_tag(page, qr_png: bytes, internal_sku: str = "", image: bytes = b""):
     x = cx - row_width / 2
     y += caption
     if image:
-        page.insert_image(fitz.Rect(x, y, x + IMG_SIZE, y + IMG_SIZE), stream=image,
-                          keep_proportion=True)
+        try:
+            page.insert_image(fitz.Rect(x, y, x + IMG_SIZE, y + IMG_SIZE), stream=image,
+                              keep_proportion=True)
+        except Exception as e:                      # a format PyMuPDF can't place
+            log.warning("Page %d: could not draw the product image: %s", page.number + 1, e)
         x += IMG_SIZE + IMG_GAP
     page.insert_image(fitz.Rect(x, y, x + QR_SIZE, y + QR_SIZE), stream=qr_png)
 
