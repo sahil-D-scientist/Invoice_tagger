@@ -176,7 +176,7 @@ def extract_item(page):
     return items[0] if items else None
 
 
-def view_url(base_url: str, item: dict, product: dict | None = None) -> str:
+def view_url(base_url: str, item: dict, product=None) -> str:
     """Build the viewer URL that shows the product's details when opened."""
     query = {
         "n": item["title"],
