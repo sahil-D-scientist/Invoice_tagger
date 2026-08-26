@@ -18,6 +18,8 @@ import streamlit as st
 from add_qr_codes import extract_item, fetch_image, make_qr_png, sheet_key, stamp_tag, view_url
 
 REQUIRED_COLS = ["WEBSITE_SKU", "INTERNAL_SKU", "PRODUCT_NAME", "PRODUCT_IMAGE"]
+# Bump on deploy, so a stale Streamlit Cloud deployment is visible at a glance.
+BUILD = "build 7 - product image beside the QR"
 # Static GitHub Pages viewer that QR codes open when scanned.
 VIEWER_URL = "https://sahil-d-scientist.github.io/Invoice_tagger"
 
@@ -115,6 +117,7 @@ st.markdown(
 
 st.title("🏷️ Invoice QR Tagger")
 st.markdown("Add a product QR code to every Amazon invoice page.")
+st.caption(BUILD)
 st.divider()
 
 sheet_link = st.text_input(
