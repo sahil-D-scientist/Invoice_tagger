@@ -148,10 +148,16 @@ st.write("")
 ready = df is not None and pdf_file is not None and bool(app_url.strip())
 if st.button("Generate PDF", type="primary", use_container_width=True, disabled=not ready):
     with st.spinner("Adding QR codes…"):
+        product_map = build_product_map(df)
         out_bytes, results = process_pdf_bytes(
-            pdf_file.getvalue(),
-            build_product_map(df),
-            app_url.strip(),
+            pdf_file.getvalue(), product_map, app_url.strip()
+        )
+    no_image = [p["internal_sku"] for p in product_map.values() if p["image_url"] and not p["image"]]
+    if no_image:
+        st.warning(
+            "Couldn't load the image for: " + ", ".join(no_image)
+            + ". The link must open the image itself (or be a Drive share link).",
+            icon="⚠️",
         )
     # Persist so the download click (which reruns the script) doesn't clear it.
     st.session_state["result"] = {
