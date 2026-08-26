@@ -31,13 +31,14 @@ B0HC4JSYM4 ( RAKHI-NEW-Z-6 PCS )
 HSN:63079090
 ```
 
-Matching ignores line breaks and letter case. Pages with no match still get a QR code,
-just without the internal SKU caption or image.
+Matching ignores line breaks and letter case. **Only pages whose item is in the sheet are
+tagged** — anything else is logged and left untouched.
 
-`PRODUCT_IMAGE` must be a **direct image URL** (right-click the product photo -> *Copy
-image address*; it ends in `.jpg` / `.png`). A link to a web page, or a picture pasted
-into the cell, will not work: pasted pictures are not the cell's value, so they never
-reach the CSV export, and a page URL downloads HTML rather than an image. Rows whose
+`PRODUCT_IMAGE` takes either a **direct image URL** (right-click the product photo ->
+*Copy image address*; ends in `.jpg` / `.png`) or a **Google Drive share link**, which is
+rewritten to the URL that serves the file itself. A link to an ordinary web page will not
+work — it downloads HTML rather than an image — and neither will a picture pasted into the
+cell, since that is not the cell's value and never reaches the CSV export. Rows whose
 image can't be fetched are logged and simply get no picture.
 
 ## Run locally

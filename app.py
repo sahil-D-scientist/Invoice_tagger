@@ -88,12 +88,13 @@ def process_pdf_bytes(pdf_bytes: bytes, product_map: dict, base_url: str):
         if not item:
             results.append((page.number + 1, "", "No invoice item found"))
             continue
-        product = product_map.get(sheet_key(item["text"])) if product_map else None
+        product = product_map.get(sheet_key(item["text"]))
+        if product is None:
+            results.append((page.number + 1, item["sku"], "Not in sheet"))
+            continue
         stamp_tag(page, make_qr_png(view_url(base_url, item, product)),
-                  product["internal_sku"] if product else "",
-                  product["image"] if product else b"")
-        results.append((page.number + 1, product["internal_sku"] if product else item["sku"],
-                        "Tagged" if product else "Tagged (not in sheet)"))
+                  product["internal_sku"], product["image"])
+        results.append((page.number + 1, product["internal_sku"], "Tagged"))
     out = doc.tobytes()
     doc.close()
     return out, results
@@ -119,10 +120,10 @@ st.markdown("Add a product QR code to every Amazon invoice page.")
 st.divider()
 
 sheet_link = st.text_input(
-    "Product sheet (optional)",
+    "Product sheet",
     placeholder="Paste Google Sheet link…",
     help="Maps the invoice description (WEBSITE_SKU) to an internal SKU + image. "
-         "Without it, pages get a QR code only.",
+         "Only pages whose item is in the sheet get a QR code.",
 )
 app_url = st.text_input(
     "App URL for QR codes",
@@ -146,12 +147,12 @@ if sheet_link.strip():
 pdf_file = st.file_uploader("Invoice PDF", type=["pdf"])
 
 st.write("")
-ready = pdf_file is not None and bool(app_url.strip())
+ready = df is not None and pdf_file is not None and bool(app_url.strip())
 if st.button("Generate PDF", type="primary", use_container_width=True, disabled=not ready):
     with st.spinner("Adding QR codes…"):
         out_bytes, results = process_pdf_bytes(
             pdf_file.getvalue(),
-            build_product_map(df) if df is not None else {},
+            build_product_map(df),
             app_url.strip(),
         )
     # Persist so the download click (which reruns the script) doesn't clear it.

@@ -8,12 +8,13 @@ For every page:
   1. Extract the item line from the invoice table: product title, ASIN,
      seller SKU, HSN code and qty.
   2. Match the item's full description against the sheet's WEBSITE_SKU column
-     to get its INTERNAL_SKU and the URL of its product image.
+     to get its INTERNAL_SKU and the URL of its product image. Items that are
+     not in the sheet are left alone.
   3. Stamp the internal SKU with the QR code below it into the empty area of
      the page.
 
-Pages without an invoice table (e.g. shipping labels) are logged and left
-unchanged.
+Pages without an invoice table (e.g. shipping labels), and pages whose item
+is not in the sheet, are logged and left unchanged.
 """
 
 import io
@@ -47,6 +48,9 @@ USER_AGENT = "Mozilla/5.0 (compatible; InvoiceQRTagger/1.0)"
 DESC_X0, DESC_X1 = 57, 344
 QTY_X0, QTY_X1 = 372, 397
 
+# Google Drive share links serve a web page, not the file behind it.
+DRIVE_RE = re.compile(r"drive\.google\.com/(?:file/d/|.*[?&]id=)([\w-]+)")
+
 # "Title | B0XXXXXXXX ( seller sku )" tail of the description.
 ASIN_RE = re.compile(r"\|\s*(B0[A-Z0-9]{8})\s*\((.*?)\)\s*$")
 
@@ -57,12 +61,19 @@ def sheet_key(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
+def direct_image_url(url: str) -> str:
+    """Rewrite a Google Drive share link to the URL that serves the file itself."""
+    m = DRIVE_RE.search(url)
+    return f"https://drive.google.com/uc?export=download&id={m.group(1)}" if m else url
+
+
 def fetch_image(url: str) -> bytes:
     """Download a product image. Returns b"" unless the bytes really are an image.
 
     A link that resolves to a web page (a product page, a Drive share link) would
     otherwise reach PyMuPDF as HTML and abort the whole run.
     """
+    url = direct_image_url(url)
     try:
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         data = urllib.request.urlopen(request, timeout=15).read()
@@ -164,7 +175,7 @@ def view_url(base_url: str, item: dict, product=None) -> str:
         "qty": item["qty"],
     }
     if product:
-        query["img"] = product["image_url"]
+        query["img"] = direct_image_url(product["image_url"])
         if product["internal_sku"]:
             query["s"] = product["internal_sku"]
     return f"{base_url.rstrip('/')}/?{urlencode({k: v for k, v in query.items() if v})}"
@@ -228,12 +239,13 @@ def process_page(page, product_map, base_url):
     if not item:
         log.warning("Page %d: no invoice item found; skipped", page.number + 1)
         return None
-    product = product_map.get(sheet_key(item["text"])) if product_map else None
+    product = product_map.get(sheet_key(item["text"]))
+    if product is None:
+        log.warning("Page %d: %r not in sheet; skipped", page.number + 1, item["sku"])
+        return None
     stamp_tag(page, make_qr_png(view_url(base_url, item, product)),
-              product["internal_sku"] if product else "",
-              product["image"] if product else b"")
-    log.info("Page %d: %s -> internal %s", page.number + 1, item["sku"],
-             product["internal_sku"] if product else "(not in sheet)")
+              product["internal_sku"], product["image"])
+    log.info("Page %d: %s -> internal %s", page.number + 1, item["sku"], product["internal_sku"])
     return item
 
 
